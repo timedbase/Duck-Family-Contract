@@ -1,0 +1,59 @@
+{
+  "chainId": 57073,
+  "network": "Ink",
+  "rpcUrl": "https://rpc-gel.inkonchain.com",
+  "deployedAt": "2026-08-30",
+  "deployerTx": "0x9628512ccad019fe98a45e3c57a791f2af94d46246b492ed24791651d85feb1d",
+  "owner": "0x43977b10095Fc5E153F907fe2E888C083fA4Fb66",
+  "platformWallet": "0x43977b10095Fc5E153F907fe2E888C083fA4Fb66",
+  "contracts": {
+    "DuckIncubation": {
+      "proxy": "0x5c4f0938FC434b60b57209BbC971544b73876675",
+      "implementation": "0x73b13b6c23591C35F90E25e55d27342aa0a9924d"
+    },
+    "DuckLauncher": {
+      "proxy": "0x2A84711A5c0Ee62118CEee1A37C0dA46a6980353",
+      "implementation": "0xCA544758ADc9Ab518185FB0784D79E4884ba5cB4"
+    },
+    "DuckRaise": {
+      "proxy": "0x39D17950BaaD5737d08b027F0494E2C261B37Cf2",
+      "implementation": "0xbaA2A0F17922729F5Aa826ec5b0B927583260E03"
+    },
+    "DuckLocker": {
+      "proxy": "0x74738a87e4D4E0eB2706724a9314d1b4452ecdFE",
+      "implementation": "0xe721C6B405bd942DB7876878bA3f9E937d32BdAd"
+    },
+    "DuckHookV4": "0xA547E097bCcA60737b8264C4dDB9bC3bE74880C4",
+    "DuckHookFactory": "0x6A07B7de1F57fB3bb43592711d9b78Eb3D927978",
+    "DuckIncubationToken_impl": "0xeEe2e78E82d75DF85b691CFAed1C28A0Df7f8A43",
+    "DuckLauncherToken_impl": "0x4deba89765cFB2A9aC906828d91602c87100a9EA",
+    "DuckRaiseToken_impl": "0x2561AaCAeeD852477eA547831A1e55F20B67f382"
+  },
+  "libraries": {
+    "V4Math": "0x5f57E7b8a01fB8Dd810535c0bE365cB37bA2E1F0",
+    "V4Minting": "0x3CBCdD7DC3F005d65774308Ac5975Afc8Bc86228",
+    "DuckIncubationMigration": "0x4bB974DdAcdD5a685263C3Fab1b906d7bc314DAA",
+    "DuckIncubationBuying": "0x8701a3F46407300635070dDBf1CFF6C3697350E2"
+  },
+  "subgraph": {
+    "provider": "Goldsky",
+    "name": "duckfun-ink",
+    "version": "1.0.0",
+    "url": "https://api.goldsky.com/api/public/project_cmhtxnzpqm81001w94ksmgira/subgraphs/duckfun-ink/1.0.0/gn",
+    "verifiedAt": "2026-08-30",
+    "status": "Deployed and fully synced as of verification, zero indexing errors. All entity queries returned correctly-shaped empty results (no on-chain activity yet -- contracts were only just deployed)."
+  },
+  "inkInfrastructure": {
+    "WETH": "0x4200000000000000000000000000000000000006",
+    "V4_POOL_MANAGER": "0x360E68faCcca8cA495c1B759Fd9EEe466db9FB32",
+    "V4_POSITION_MANAGER": "0x1b35d13a2E2528f192637F14B05f0Dc0e7dEB566",
+    "V4_STATE_VIEW": "0x76Fd297e2D437cd7f76d50F01AfE6160f86e9990",
+    "PERMIT2": "0x000000000022D473030F116dDEE9F6B43aC78BA3"
+  },
+  "notes": [
+    "Owner and platformWallet both currently the deployer EOA -- move platformWallet to a treasury and consider a timelock/multisig for ownership before real volume flows through this.",
+    "DuckIncubation/DuckLauncher default-allow 15 Ink ERC20s as quote tokens for direct trading (see DuckIncubationMigration.seedDefaultQuoteTokens); only USDC and USDT0 have real Ink liquidity and get a seeded buyWithNative/early-buy route (fee=3000, tickSpacing=60, native-ETH-paired V4 pool).",
+    "DuckRaise's quoteAssetAllowed is narrower by design -- only USDC/USDT0 -- since a raise's dexQuoteAsset must be swappable at finalize.",
+    "Verified post-deploy via cast: bytecode present at every address, hook permission bits == 0xC4, all four proxies' EIP-1967 implementation slots correct, ownership/launcher-authorization wiring correct, default quote-token/route/quoteAsset state correct."
+  ]
+}

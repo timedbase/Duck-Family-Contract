@@ -1,0 +1,6 @@
+out/
+cache/
+lib/
+foundry.lock
+.env
+broadcast/*/*/dry-run/
