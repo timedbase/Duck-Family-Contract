@@ -147,6 +147,22 @@ contract DuckHookV4Test is Test {
         assertEq(hook.accruedFees(poolId), expectedFee);
     }
 
+    // A sell specified as exact-output (trader asks for an exact quote
+    // amount out, letting the token input float) must still be fee'd --
+    // only the resulting balance deltas identify a sell, not which side the
+    // swapper specified as exact. Same deltas as the exact-input case
+    // above, just a positive amountSpecified.
+    function test_AfterSwapAccruesFeeOnExactOutputSell() public {
+        SwapParams memory params = SwapParams({zeroForOne: true, amountSpecified: 10e18, sqrtPriceLimitX96: 0});
+        int256 delta = _packDelta(-100e18, 10e18);
+
+        vm.prank(poolManager);
+        hook.afterSwap(address(this), key, params, delta, "");
+
+        uint256 expectedFee = uint256(10e18) * 200 / 10_000; // 2% default
+        assertEq(hook.accruedFees(poolId), expectedFee);
+    }
+
     function test_AfterSwapSkipsBuys() public {
         // Buy: token comes in (+), quote leaves (-) -- not an exact-input sell.
         SwapParams memory params = SwapParams({zeroForOne: false, amountSpecified: -10e18, sqrtPriceLimitX96: 0});

@@ -248,7 +248,7 @@ contract DuckHookV4 {
         return (this.beforeSwap.selector, int256(0), 0);
     }
 
-    function afterSwap(address, PoolKey calldata key, SwapParams calldata params, int256 delta, bytes calldata)
+    function afterSwap(address, PoolKey calldata key, SwapParams calldata, int256 delta, bytes calldata)
         external returns (bytes4, int128)
     {
         if (msg.sender != poolManager) revert NotPoolManager();
@@ -263,8 +263,14 @@ contract DuckHookV4 {
             ? (amount0Delta, amount1Delta)
             : (amount1Delta, amount0Delta);
 
-        bool isExactInputSell = tokenDelta < 0 && params.amountSpecified < 0;
-        if (!isExactInputSell || quoteDelta <= 0) return (this.afterSwap.selector, int128(0));
+        // A sell is identified purely by the resulting balance deltas (token
+        // left the pool, quote left the pool to the trader) -- not by which
+        // side the swapper specified as exact. Gating on
+        // params.amountSpecified < 0 (exact-input only) let an exact-output
+        // sell skip the fee entirely; delta signs alone already capture
+        // both swap directions correctly.
+        bool isSell = tokenDelta < 0 && quoteDelta > 0;
+        if (!isSell) return (this.afterSwap.selector, int128(0));
 
         uint256 feeCut = uint256(uint128(quoteDelta)) * info.hookFeeBps / BPS;
         if (feeCut == 0) return (this.afterSwap.selector, int128(0));
