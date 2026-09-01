@@ -61,6 +61,16 @@ interface IERC20BalanceRouting {
     function balanceOf(address account) external view returns (uint256);
 }
 
+// Uniswap's UniversalRouter (verified on Ink at 0x1129...1fa0, same contract
+// this platform already uses for its own V4 swaps). Its V3_SWAP_EXACT_IN
+// command computes the target pool address via CREATE2 from a factory
+// address baked into the router's own bytecode at deployment -- it never
+// calls factory.getPool() -- so this only ever reaches pools created by
+// whichever V3 factory that router was deployed against.
+interface IUniversalRouter {
+    function execute(bytes calldata commands, bytes[] calldata inputs, uint256 deadline) external payable;
+}
+
 struct PoolKey {
     address currency0;
     address currency1;
@@ -87,7 +97,7 @@ interface IWETH {
     function deposit() external payable;
 }
 
-enum RouteShape { V2_STYLE, V3_STYLE, V4_STYLE }
+enum RouteShape { V2_STYLE, V3_STYLE, V4_STYLE, UNIVERSAL_ROUTER_STYLE }
 
 struct Route {
     RouteShape shape;
@@ -154,6 +164,8 @@ abstract contract LaunchRouting {
             amountOut = _swapV2Style(route_, amountIn_, minOut_, recipient_);
         } else if (route_.shape == RouteShape.V3_STYLE) {
             amountOut = _swapV3Style(route_, amountIn_, minOut_, recipient_);
+        } else if (route_.shape == RouteShape.UNIVERSAL_ROUTER_STYLE) {
+            amountOut = _swapUniversalRouterStyle(route_, amountIn_, minOut_, recipient_);
         } else {
             amountOut = _swapV4Style(route_, quoteToken_, amountIn_, minOut_, recipient_);
         }
@@ -223,6 +235,28 @@ abstract contract LaunchRouting {
                 }));
             }
         }
+    }
+
+    // route_.router = UniversalRouter; route_.path/fees = the V3 hop(s), same
+    // packed encoding _encodeV3Path already produces for the plain V3 style.
+    // WRAP_ETH deposits amountIn_ into WETH held by the router itself, then
+    // V3_SWAP_EXACT_IN spends that balance directly (payerIsUser=false) --
+    // no Permit2 approval needed since we fund the router's own balance
+    // rather than have it pull from us.
+    function _swapUniversalRouterStyle(Route calldata route_, uint256 amountIn_, uint256 minOut_, address recipient_)
+        private returns (uint256 amountOut)
+    {
+        address tokenOut = route_.path[route_.path.length - 1];
+        uint256 balBefore = IERC20BalanceRouting(tokenOut).balanceOf(recipient_);
+
+        bytes memory commands = abi.encodePacked(bytes1(0x0b), bytes1(0x00)); // WRAP_ETH, V3_SWAP_EXACT_IN
+        bytes[] memory inputs = new bytes[](2);
+        inputs[0] = abi.encode(address(2), amountIn_); // ActionConstants.ADDRESS_THIS
+        inputs[1] = abi.encode(recipient_, amountIn_, minOut_, _encodeV3Path(route_.path, route_.fees), false);
+
+        IUniversalRouter(route_.router).execute{value: amountIn_}(commands, inputs, block.timestamp);
+
+        amountOut = IERC20BalanceRouting(tokenOut).balanceOf(recipient_) - balBefore;
     }
 
     function _swapV3ChainedStyle(Route calldata route_, uint256 amountIn_, uint256 minOut_, address recipient_)
