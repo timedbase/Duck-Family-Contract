@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.32;
 
-// duckfun.family — DuckRaise
+// duckfun.family — DuckRaiseArc
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -9,8 +9,8 @@ import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Own
 // Namespaced-storage-slot based -- safe to use directly here with no
 // separate "Upgradeable" variant or initializer needed.
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {LaunchRouting, Route, RouteShape, PoolKey} from "../common/LaunchRouting.sol";
-import {V4Math} from "../common/V4Math.sol";
+import {LaunchRouting, Route, RouteShape, PoolKey} from "../common-arc/LaunchRouting.sol";
+import {V4Math} from "../common-arc/V4Math.sol";
 
 interface IDuckRaiseTokenLocal {
     function initDuckRaise(string calldata name_, string calldata symbol_, string calldata metaURI_) external;
@@ -45,7 +45,7 @@ interface IWETHLocal {
     function deposit() external payable;
 }
 
-contract DuckRaise is Initializable, UUPSUpgradeable, OwnableUpgradeable, ReentrancyGuard, LaunchRouting {
+contract DuckRaiseArc is Initializable, UUPSUpgradeable, OwnableUpgradeable, ReentrancyGuard, LaunchRouting {
 
     error ZeroAddress();
     error ZeroAmount();
@@ -108,7 +108,7 @@ contract DuckRaise is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentr
     address      public v4Singleton; // PoolManager
     address      public v4PositionManager;
     address      public v4Permit2;
-    address      public v4Hook;      // shared DuckHookV4 instance, same one the other families use
+    address      public v4Hook;      // shared DuckHookV4Arc instance, same one the other families use
     uint256      public contributorBps;
     uint256      public lpBps;
     uint256      public campaignFee;
@@ -118,7 +118,7 @@ contract DuckRaise is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentr
     // campaignFee. address(0) disables it.
     address      public platformToken;
 
-    // Narrower than DuckIncubation/DuckLauncher's quote-token lists: a
+    // Narrower than DuckIncubationArc/DuckLauncherArc's quote-token lists: a
     // raise's dexQuoteAsset must actually be swappable at finalize (100% of
     // raised ETH converts into it), so only assets with a real configured
     // route belong here. address(0) is always implicitly allowed.
@@ -190,17 +190,19 @@ contract DuckRaise is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentr
         v4Permit2         = v4Permit2_;
         v4Hook            = v4Hook_;
         platformWallet         = platformWallet_;
-        campaignFee       = 0.0005 ether;
+        campaignFee       = 1e18; // 1 USDC -- Arc's native gas token, 18 decimals
 
         contributorBps   = 8_000;
         lpBps            = 2_000;
         campaignDuration = 2 hours;
 
-        // Deliberately NOT seeding the default USDC/USDT0 routes here
-        // anymore -- that logic pushed this contract over EIP-170's
-        // 24,576-byte size limit. Set right after deploy instead, via the
-        // deploy script calling the already-existing setQuoteAssetAllowed/
-        // setRoutes owner functions directly.
+        // Deliberately NOT seeding any default routes/quote assets here,
+        // unlike the Ink deployment this was copied from -- that route was
+        // for two real, verified Ink-chain token addresses (USDC/USDT0)
+        // with a confirmed native-ETH-paired pool. None of that carries
+        // over to Arc; the owner adds real Arc-chain assets via
+        // setQuoteAssetAllowed/setRoutes once they're identified and
+        // verified.
     }
 
     function setQuoteAssetAllowed(address token_, bool allowed_) external onlyOwner {
@@ -548,7 +550,7 @@ contract DuckRaise is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentr
         }
     }
 
-    // Must match DuckHookV4's own allowed set exactly.
+    // Must match DuckHookV4Arc's own allowed set exactly.
     function _isValidHookFeeBps(uint256 bps) private pure returns (bool) {
         return bps == 0 || bps == 100 || bps == 200 || bps == 300 || bps == 500;
     }

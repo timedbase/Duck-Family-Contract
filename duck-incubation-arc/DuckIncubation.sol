@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.32;
 
-// duckfun.family — DuckIncubation
+// duckfun.family — DuckIncubationArc
 
 import "./interfaces/IDuckIncubationToken.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
@@ -27,7 +27,7 @@ interface ITokenInit {
     ) external;
 }
 
-contract DuckIncubation is Initializable, UUPSUpgradeable, Ownable2StepUpgradeable, LaunchRouting {
+contract DuckIncubationArc is Initializable, UUPSUpgradeable, Ownable2StepUpgradeable, LaunchRouting {
 
     struct Alloc {
         uint256 supply;
@@ -129,8 +129,6 @@ contract DuckIncubation is Initializable, UUPSUpgradeable, Ownable2StepUpgradeab
     error ZeroAddress();
     error ZeroAmount();
     error InsufficientCreationFee();
-    error CloneFailed();
-    error VanityAddressRequired();
     error NativeTransferFailed();
     error NativeNotAccepted();
     error DeadlineExpired();
@@ -139,26 +137,23 @@ contract DuckIncubation is Initializable, UUPSUpgradeable, Ownable2StepUpgradeab
     error UnknownToken();
     error AlreadyMigrated();
     error ExceedsSoldSupply();
-    error LiquidityReserveViolation();
-    error InsufficientPoolQuote();
-    error SlippageTooLittleQuote();
-    error SlippageTooFewTokens();
     error MigrationTargetNotReached();
-    error ActivePool();
-    error AntibotBlocksOutOfRange();
     error InvalidAllocation();
     error InvalidMarketCaps();
     error InvalidSupply();
     error MigrationPending();
-    error InsufficientContractBalance();
     error QuoteTokenNotAllowed();
     error InvalidHookFeeBps();
     error NotMigrated();
-    error NotCreator();
-    error TooManyFeeSplits();
-    error InvalidFeeSplitBps();
     error NativeQuoteNoSwapNeeded();
     error RouteUnavailable();
+    // CloneFailed/VanityAddressRequired/LiquidityReserveViolation/
+    // InsufficientPoolQuote/SlippageTooLittleQuote/SlippageTooFewTokens/
+    // ActivePool/AntibotBlocksOutOfRange/InsufficientContractBalance/
+    // NotCreator/TooManyFeeSplits/InvalidFeeSplitBps are thrown by
+    // DuckIncubationBuying/DuckIncubationMigration, which declare their own
+    // copies -- redeclaring them here never got thrown by this contract
+    // itself, just cost bytecode for a selector nothing here ever used.
 
     event TokenCreated(
         address indexed token,
@@ -251,7 +246,7 @@ contract DuckIncubation is Initializable, UUPSUpgradeable, Ownable2StepUpgradeab
         platformWallet      = platformWallet_;
         tokenImpl         = tokenImpl_;
         locker            = locker_;
-        creationFee       = 0.0005 ether;
+        creationFee       = 1e18; // 1 USDC -- Arc's native gas token, 18 decimals (not ETH; see Deploy.s.sol header)
         _status           = _NOT_ENTERED;
 
         minCurveBps     = 3000; // 30% minimum on the bonding curve
@@ -259,13 +254,12 @@ contract DuckIncubation is Initializable, UUPSUpgradeable, Ownable2StepUpgradeab
         minSupply       = 1e18;
         maxSupply       = 999_000_000_000_000e18;
 
-        // Deliberately NOT seeding the default quote-token whitelist/routes
-        // here anymore -- that logic pushed this contract over EIP-170's
-        // 24,576-byte size limit. The same 15 real, verified Ink-chain
-        // addresses (and the USDC/USDT0 native-ETH-paired routes) get set
-        // right after deploy instead, via the deploy script calling the
-        // already-existing setQuoteTokenAllowed/setRoutes owner functions
-        // directly -- no new contract code needed for this at all.
+        // Deliberately NOT seeding any default quote tokens/routes here,
+        // unlike the Ink deployment this was copied from -- that seed list
+        // was 15 real, verified Ink-chain token addresses with a confirmed
+        // native-ETH-paired route for two of them. None of that carries
+        // over to Arc; the owner adds real Arc-chain assets via
+        // addQuoteToken/setRoutes once they're identified and verified.
     }
 
     // Bound to the specific proposed implementation -- re-proposing a
@@ -615,6 +609,7 @@ contract DuckIncubation is Initializable, UUPSUpgradeable, Ownable2StepUpgradeab
         return bps == 0 || bps == 100 || bps == 200 || bps == 300 || bps == 500;
     }
 
+
     function _queueAction(bytes32 actionId) private {
         uint256 unlock = block.timestamp + TIMELOCK_DELAY;
         timelockExpiry[actionId] = unlock;
@@ -657,7 +652,7 @@ contract DuckIncubation is Initializable, UUPSUpgradeable, Ownable2StepUpgradeab
     }
 
     // Migrates into a fresh Uniswap V4 1% pool, full-range, hook-gated,
-    // minted to and locked permanently in the shared DuckLocker (moved to
+    // minted to and locked permanently in the shared DuckLockerArc (moved to
     // the external DuckIncubationMigration library for the same size
     // reason as _executeBuy above).
     function _doMigrate(TokenConfig storage tc, address token_) private {
@@ -692,8 +687,8 @@ contract DuckIncubation is Initializable, UUPSUpgradeable, Ownable2StepUpgradeab
 
     // Pricing math itself lives in DuckIncubationBuying.previewBuy/previewSell
     // now, shared with _calcBuy/executeSell's real, mutating equivalents --
-    // duplicating that formula here (as this used to) pushes this contract
-    // over EIP-170's 24,576-byte size limit on a fresh deploy/upgrade.
+    // duplicating that formula here (as this used to) pushed this contract
+    // over EIP-170's 24,576-byte size limit.
     function getAmountOut(address token_, uint256 quoteIn)
         external view
         returns (uint256 tokensOut, uint256 feeQuote)

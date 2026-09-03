@@ -36,7 +36,7 @@ library DuckIncubationBuying {
 
     address private constant DEAD = 0x000000000000000000000000000000000000dEaD;
     uint256 private constant BPS_DENOM      = 10_000;
-    uint256 private constant CURVE_FEE_BPS  =    100; // 1%, fixed -- matches DuckIncubation.claimCurveFee
+    uint256 private constant CURVE_FEE_BPS  =    100; // 1%, fixed -- matches DuckIncubationArc.claimCurveFee
 
     function executeBuy(
         TokenConfig storage tc,
@@ -242,12 +242,9 @@ library DuckIncubationBuying {
     }
 
     // Read-only mirrors of _calcBuy/executeSell's pricing math, extracted so
-    // DuckIncubation's own getAmountOut/getAmountOutSell can call this
+    // DuckIncubationArc's own getAmountOut/getAmountOutSell can call this
     // instead of reimplementing the same formula a second time (duplicating
-    // it pushed the caller over EIP-170's 24,576-byte contract size limit --
-    // the currently-live implementation predates this growth and still
-    // fits, but the current source no longer does; this keeps a future
-    // upgrade deployable).
+    // it pushed the caller over EIP-170's 24,576-byte contract size limit).
     function previewBuy(
         uint256 migrationTarget, uint256 raisedQuote, uint256 virtualQuote,
         uint256 bcTokensTotal, uint256 bcTokensSold, uint256 k, uint256 quoteIn

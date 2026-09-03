@@ -9,14 +9,14 @@ optimizer_runs = 150
 fs_permissions = [{ access = "read", path = "../" }]
 allow_paths = ["../"]
 remappings = [
-  "duck-launcher-contracts/=../duck-launcher/",
-  "duckraise-contracts/=../duckraise/",
-  "duck-incubation-contracts/=../duck-incubation/",
-  "common-contracts/=../common/",
+  "duck-launcher-contracts/=../duck-launcher-arc/",
+  "duckraise-contracts/=../duckraise-arc/",
+  "duck-incubation-contracts/=../duck-incubation-arc/",
+  "common-contracts/=../common-arc/",
   "@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/",
   "@openzeppelin/contracts/=lib/openzeppelin-contracts-upgradeable/lib/openzeppelin-contracts/contracts/",
   "forge-std/=lib/forge-std/src/",
 ]
 
 [rpc_endpoints]
-ink = "${INK_RPC_URL}"
+arc = "${ARC_RPC_URL}"

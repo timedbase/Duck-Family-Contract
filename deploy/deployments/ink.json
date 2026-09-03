@@ -5,43 +5,43 @@
   "deployedAt": "2026-08-30",
   "deployerTx": "0x9628512ccad019fe98a45e3c57a791f2af94d46246b492ed24791651d85feb1d",
   "owner": "0x43977b10095Fc5E153F907fe2E888C083fA4Fb66",
-  "platformWallet": "0x43977b10095Fc5E153F907fe2E888C083fA4Fb66",
+  "platformWallet": "0x586Eb3db5866D76D752916396D63352DB29a47Bd",
   "contracts": {
     "DuckIncubation": {
-      "proxy": "0x5c4f0938FC434b60b57209BbC971544b73876675",
-      "implementation": "0x73b13b6c23591C35F90E25e55d27342aa0a9924d"
+      "proxy": "0xB9f7213262FE429387eAD6EB63e547Ba05E0D935",
+      "implementation": "0x5C60782D4F6728AED94d9db5558f440dfb6456Ce"
     },
     "DuckLauncher": {
       "proxy": "0x2A84711A5c0Ee62118CEee1A37C0dA46a6980353",
       "implementation": "0xCA544758ADc9Ab518185FB0784D79E4884ba5cB4"
     },
     "DuckRaise": {
-      "proxy": "0x39D17950BaaD5737d08b027F0494E2C261B37Cf2",
-      "implementation": "0xbaA2A0F17922729F5Aa826ec5b0B927583260E03"
+      "proxy": "0xdEb4D7fe8BEA866B91A2be8ED35D171F8312269b",
+      "implementation": "0x101Ed6Df1407ef704A6472a737c4D009100995B1"
     },
     "DuckLocker": {
       "proxy": "0x74738a87e4D4E0eB2706724a9314d1b4452ecdFE",
       "implementation": "0xe721C6B405bd942DB7876878bA3f9E937d32BdAd"
     },
-    "DuckHookV4": "0xA547E097bCcA60737b8264C4dDB9bC3bE74880C4",
+    "DuckHookV4": "0x067A168DA351d40e086B974F16F94CB0f3dF00c4",
     "DuckHookFactory": "0x6A07B7de1F57fB3bb43592711d9b78Eb3D927978",
     "DuckIncubationToken_impl": "0xeEe2e78E82d75DF85b691CFAed1C28A0Df7f8A43",
     "DuckLauncherToken_impl": "0x4deba89765cFB2A9aC906828d91602c87100a9EA",
     "DuckRaiseToken_impl": "0x2561AaCAeeD852477eA547831A1e55F20B67f382"
   },
   "libraries": {
-    "V4Math": "0x5f57E7b8a01fB8Dd810535c0bE365cB37bA2E1F0",
-    "V4Minting": "0x3CBCdD7DC3F005d65774308Ac5975Afc8Bc86228",
-    "DuckIncubationMigration": "0x4bB974DdAcdD5a685263C3Fab1b906d7bc314DAA",
-    "DuckIncubationBuying": "0x8701a3F46407300635070dDBf1CFF6C3697350E2"
+    "V4Math": "0x770Ce8ce07Bed07fA9EEC09d93Bf54C1424270CD",
+    "V4Minting": "0x9D6f4876395fD9c619Cc9fa99c3f02c00599aFC2",
+    "DuckIncubationMigration": "0x2d74f9f34AbAc56dE1b36198569d1125F669342C",
+    "DuckIncubationBuying": "0xA38acc3D914253260E2FD8611DB3dffB9879BA48"
   },
   "subgraph": {
     "provider": "Goldsky",
     "name": "duckfun-ink",
-    "version": "1.0.0",
-    "url": "https://api.goldsky.com/api/public/project_cmhtxnzpqm81001w94ksmgira/subgraphs/duckfun-ink/1.0.0/gn",
-    "verifiedAt": "2026-08-30",
-    "status": "Deployed and fully synced as of verification, zero indexing errors. All entity queries returned correctly-shaped empty results (no on-chain activity yet -- contracts were only just deployed)."
+    "version": "2026.09.03142148",
+    "url": "https://api.goldsky.com/api/public/project_cmhtxnzpqm81001w94ksmgira/subgraphs/duckfun-ink/current/gn",
+    "verifiedAt": "2026-09-03",
+    "status": "Redeployed after the 2026-09-03 DuckIncubation/DuckRaise redeploy; retagged 'current', indexing cleanly from the new startBlock with zero errors."
   },
   "inkInfrastructure": {
     "WETH": "0x4200000000000000000000000000000000000006",
@@ -51,9 +51,10 @@
     "PERMIT2": "0x000000000022D473030F116dDEE9F6B43aC78BA3"
   },
   "notes": [
-    "Owner and platformWallet both currently the deployer EOA -- move platformWallet to a treasury and consider a timelock/multisig for ownership before real volume flows through this.",
-    "DuckIncubation/DuckLauncher default-allow 15 Ink ERC20s as quote tokens for direct trading (see DuckIncubationMigration.seedDefaultQuoteTokens); only USDC and USDT0 have real Ink liquidity and get a seeded buyWithNative/early-buy route (fee=3000, tickSpacing=60, native-ETH-paired V4 pool).",
+    "2026-09-03: DuckIncubation and DuckRaise were redeployed fresh (new proxies above, deploy/script/DeployIncubationRaiseV2.s.sol) because both original implementations had grown past EIP-170's 24,576-byte contract size limit -- confirmed via a live dry-run simulation, not just forge build. Fixed by deduplicating bonding-curve math into DuckIncubationBuying.previewBuy/previewSell, dropping the in-contract default quote-token/route seeding, and lowering optimizer_runs 200->150. Confirmed via the live subgraph that neither original proxy had ever processed a real token/campaign, so a fresh redeploy (not a timelocked upgrade) was safe. The old proxies (curve 0x5c4f0938FC434b60b57209BbC971544b73876675, raise 0x39D17950BaaD5737d08b027F0494E2C261B37Cf2) are deauthorized on DuckLocker and DuckHookV4 and must never be used again.",
+    "The 15-address default quote-token/route seeding that used to run inside DuckIncubation/DuckRaise initialize() is gone (that duplication was part of the size overage). The new proxies only have USDC and USDT0 seeded (the two with real Ink liquidity), set directly via setQuoteTokenAllowed/setRoutes post-deploy. Add the rest back with addQuoteToken calls if wanted.",
+    "Owner is still the deployer EOA -- platformWallet has been moved to a treasury wallet. Consider a timelock/multisig for ownership before real volume flows through this.",
     "DuckRaise's quoteAssetAllowed is narrower by design -- only USDC/USDT0 -- since a raise's dexQuoteAsset must be swappable at finalize.",
-    "Verified post-deploy via cast: bytecode present at every address, hook permission bits == 0xC4, all four proxies' EIP-1967 implementation slots correct, ownership/launcher-authorization wiring correct, default quote-token/route/quoteAsset state correct."
+    "Verified post-redeploy via cast: bytecode size at both new implementations matches the local build exactly (DuckIncubation 24527 bytes, DuckRaise 22328 bytes), both proxies' EIP-1967 implementation slots correct, owner/platformWallet/v4Hook read back correctly, cross-contract launcher authorization on DuckLocker + DuckHookV4 correct (new proxies added, old ones removed)."
   ]
 }
