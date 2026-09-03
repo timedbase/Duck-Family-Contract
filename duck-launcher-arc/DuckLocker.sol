@@ -91,10 +91,13 @@ contract DuckLockerArc is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     // here. Both in bps out of 10_000, each independently owner-updateable:
     // v3TokenBurnBps of the collected TOKEN side is burned, the rest goes to
     // the creator; v3QuoteCreatorBps of the collected QUOTE side goes to the
-    // creator, the rest to the platform wallet. Defaults match the
-    // originally-specified 50/50 split on each side.
-    uint16 public v3TokenBurnBps = 5_000;
-    uint16 public v3QuoteCreatorBps = 5_000;
+    // creator, the rest to the platform wallet. Defaults (matching the
+    // originally-specified 50/50 split on each side) are set in initialize()
+    // below, NOT here -- an inline initializer on a UUPS-upgradeable
+    // contract only ever applies to the implementation's own storage, never
+    // a proxy's, so one here would silently leave every real deployment at 0.
+    uint16 public v3TokenBurnBps;
+    uint16 public v3QuoteCreatorBps;
 
     event V3TokenBurnBpsSet(uint16 bps);
     event V3QuoteCreatorBpsSet(uint16 bps);
@@ -121,7 +124,10 @@ contract DuckLockerArc is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         uint256 paid;
     }
 
-    uint256 public v3CtoFee = 50e18; // 50 USDC -- Arc's native gas token, 18 decimals
+    // Default (50 USDC -- Arc's native gas token, 18 decimals) set in
+    // initialize() below, not here -- see v3TokenBurnBps's comment above for
+    // why an inline initializer here would silently do nothing on a proxy.
+    uint256 public v3CtoFee;
     mapping(address => V3CTOApplication) public v3CtoApplications;
 
     event V3CTOFeeSet(uint256 fee);
@@ -189,6 +195,17 @@ contract DuckLockerArc is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         if (platformWallet_ == address(0)) revert ZeroAddress();
         __Ownable_init(msg.sender);
         platformWallet = platformWallet_;
+        // Inline field initializers below (now removed) only ever ran
+        // against the implementation contract's own throwaway storage, never
+        // the proxy's real storage -- a UUPS proxy's constructor never runs
+        // via delegatecall, so v3TokenBurnBps/v3QuoteCreatorBps/v3CtoFee were
+        // silently 0 on every real deployment until fixed here. Confirmed
+        // live on Arc (cast calls returned 0/0/0) and corrected via
+        // setV3TokenBurnBps/setV3QuoteCreatorBps/setV3CtoFee on that already-
+        // live proxy -- this fix only matters for a FUTURE fresh deploy.
+        v3TokenBurnBps = 5_000;
+        v3QuoteCreatorBps = 5_000;
+        v3CtoFee = 50e18;
     }
 
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {
