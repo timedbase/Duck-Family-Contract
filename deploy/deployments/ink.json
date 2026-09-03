@@ -50,6 +50,39 @@
     "V4_STATE_VIEW": "0x76Fd297e2D437cd7f76d50F01AfE6160f86e9990",
     "PERMIT2": "0x000000000022D473030F116dDEE9F6B43aC78BA3"
   },
+  "legacy": {
+    "DuckHookV4_v1": {
+      "address": "0xA547E097bCcA60737b8264C4dDB9bC3bE74880C4",
+      "deployedAt": "2026-08-30",
+      "replacedAt": "2026-08-30",
+      "replacedBy": "0x067A168DA351d40e086B974F16F94CB0f3dF00c4",
+      "replacementTx": "0xb0eca867dd3b8fcbfff14838a863644e5946dca58ac45dbbcf8e4ffd637da132",
+      "reason": "Exact-output sell-fee calculation fix (see deploy/script/DeployNewHook.s.sol). Superseded same-day as the original deploy, before any real pools existed.",
+      "note": "Any pool ever created against this hook keeps using it forever (a pool's hook is fixed at creation) -- but none were, so this address is fully retired. All three family proxies had addLauncher revoked on it once the new hook was wired."
+    },
+    "DuckIncubation_v1": {
+      "proxy": "0x5c4f0938FC434b60b57209BbC971544b73876675",
+      "implementation": "0x73b13b6c23591C35F90E25e55d27342aa0a9924d",
+      "libraries": {
+        "V4Math": "0x5f57E7b8a01fB8Dd810535c0bE365cB37bA2E1F0",
+        "V4Minting": "0x3CBCdD7DC3F005d65774308Ac5975Afc8Bc86228",
+        "DuckIncubationMigration": "0x4bB974DdAcdD5a685263C3Fab1b906d7bc314DAA",
+        "DuckIncubationBuying": "0x8701a3F46407300635070dDBf1CFF6C3697350E2"
+      },
+      "deployedAt": "2026-08-30",
+      "retiredAt": "2026-09-03",
+      "replacedBy": "0xB9f7213262FE429387eAD6EB63e547Ba05E0D935",
+      "reason": "Implementation grew past EIP-170's 24,576-byte size limit. Never processed a real token (confirmed via the subgraph), so replaced via fresh proxy deploy rather than an in-place upgrade. Deauthorized on DuckLocker and DuckHookV4 -- must never be used again."
+    },
+    "DuckRaise_v1": {
+      "proxy": "0x39D17950BaaD5737d08b027F0494E2C261B37Cf2",
+      "implementation": "0xbaA2A0F17922729F5Aa826ec5b0B927583260E03",
+      "deployedAt": "2026-08-30",
+      "retiredAt": "2026-09-03",
+      "replacedBy": "0xdEb4D7fe8BEA866B91A2be8ED35D171F8312269b",
+      "reason": "Same EIP-170 size overage as DuckIncubation_v1 (independently discovered while fixing that one). Never processed a real campaign. Deauthorized on DuckLocker and DuckHookV4 -- must never be used again."
+    }
+  },
   "notes": [
     "2026-09-03: DuckIncubation and DuckRaise were redeployed fresh (new proxies above, deploy/script/DeployIncubationRaiseV2.s.sol) because both original implementations had grown past EIP-170's 24,576-byte contract size limit -- confirmed via a live dry-run simulation, not just forge build. Fixed by deduplicating bonding-curve math into DuckIncubationBuying.previewBuy/previewSell, dropping the in-contract default quote-token/route seeding, and lowering optimizer_runs 200->150. Confirmed via the live subgraph that neither original proxy had ever processed a real token/campaign, so a fresh redeploy (not a timelocked upgrade) was safe. The old proxies (curve 0x5c4f0938FC434b60b57209BbC971544b73876675, raise 0x39D17950BaaD5737d08b027F0494E2C261B37Cf2) are deauthorized on DuckLocker and DuckHookV4 and must never be used again.",
     "The 15-address default quote-token/route seeding that used to run inside DuckIncubation/DuckRaise initialize() is gone (that duplication was part of the size overage). The new proxies only have USDC and USDT0 seeded (the two with real Ink liquidity), set directly via setQuoteTokenAllowed/setRoutes post-deploy. Add the rest back with addQuoteToken calls if wanted.",
