@@ -1,0 +1,68 @@
+{
+  "chainId": 5042,
+  "network": "Arc",
+  "rpcUrl": "https://rpc.arc-scan.org",
+  "deployedAt": "2026-09-03",
+  "deployerTx": "0x7d6a78a3743f1bd58c84826cb6750ab269ea3dade5b5160f6edc8f67069bc0c9",
+  "owner": "0x43977b10095Fc5E153F907fe2E888C083fA4Fb66",
+  "platformWallet": "0x586Eb3db5866D76D752916396D63352DB29a47Bd",
+  "contracts": {
+    "DuckIncubationArc": {
+      "proxy": "0x5c4f0938FC434b60b57209BbC971544b73876675",
+      "implementation": "0x73b13b6c23591C35F90E25e55d27342aa0a9924d"
+    },
+    "DuckLauncherArc": {
+      "proxy": "0x2A84711A5c0Ee62118CEee1A37C0dA46a6980353",
+      "implementation": "0xCA544758ADc9Ab518185FB0784D79E4884ba5cB4"
+    },
+    "DuckRaiseArc": {
+      "proxy": "0x9AE7383af6ea77037c09459a9aF8f4AEC038f083",
+      "implementation": "0x39D17950BaaD5737d08b027F0494E2C261B37Cf2"
+    },
+    "DuckLockerArc": {
+      "proxy": "0x74738a87e4D4E0eB2706724a9314d1b4452ecdFE",
+      "implementation": "0xe721C6B405bd942DB7876878bA3f9E937d32BdAd"
+    },
+    "DuckHookV4Arc": "0x5C53161656C8b13883b2CD9936Acf6FcA56100c4",
+    "DuckHookFactory": "0x6A07B7de1F57fB3bb43592711d9b78Eb3D927978",
+    "DuckIncubationTokenArc_impl": "0xeEe2e78E82d75DF85b691CFAed1C28A0Df7f8A43",
+    "DuckLauncherTokenArc_impl": "0x4deba89765cFB2A9aC906828d91602c87100a9EA",
+    "DuckRaiseTokenArc_impl": "0x2561AaCAeeD852477eA547831A1e55F20B67f382"
+  },
+  "libraries": {
+    "V4Math": "0x9Ec3c1956855C492AB9a22be33a4f546333734A0",
+    "V4Minting": "0xEdea2befCEd44C93ceEA1551e99118f1cE3beD06",
+    "DuckIncubationMigration": "0x2fA430E618fA0cbF85dD4223335F69cE3aB415c1",
+    "DuckIncubationBuying": "0x74016ae009B4645a686f4ac033D5783dFdE59215"
+  },
+  "dex": {
+    "v4": {
+      "positionManager": "0x6049c9a0e26405C0985f9E3685C87d0aE917f82B",
+      "poolManager": "0x8366a39CC670B4001A1121B8F6A443A643e40951",
+      "permit2": "0x000000000022D473030F116dDEE9F6B43aC78BA3"
+    },
+    "v3": {
+      "positionManager": "0x39654A85A4C05127f5Fd6ED22CAeC077A0fB1377",
+      "router": "0x53BF6B0684Ec7eF91e1387Da3D1a1769bC5A6F77",
+      "note": "V3 support is DuckLauncherArc-only (registered via addDexV3). DuckIncubationArc/DuckRaiseArc are V4-only."
+    }
+  },
+  "fees": {
+    "creationFee": "1000000000000000000",
+    "launchFee": "1000000000000000000",
+    "campaignFee": "1000000000000000000",
+    "ctoFee": "50000000000000000000",
+    "note": "All native-currency-denominated (native gas on Arc is USDC, 18-decimal precision) -- 1 USDC creation/launch/campaign fee, 50 USDC CTO fee."
+  },
+  "arcInfrastructure": {
+    "nativeErc20Mirror": "0x3600000000000000000000000000000000000000",
+    "note": "Arc has no WETH. Native gas IS USDC (18-decimal). The address above is an unverified-live ERC20 mirror of native USDC, referenced only by an inert LaunchRouting fallback that this deploy never configures a route for."
+  },
+  "notes": [
+    "IMPORTANT -- cross-chain address collision (expected, not a bug): the deployer EOA (0x43977b10095Fc5E153F907fe2E888C083fA4Fb66) landed on the same nonce sequence on Arc as it originally used on Ink, and plain CREATE addresses depend only on (deployer, nonce), not chain ID. As a result several Arc addresses are byte-for-byte identical STRINGS to Ink addresses: DuckLauncherArc/DuckLockerArc proxies and all three token impls match their live Ink counterparts exactly; DuckIncubationArc/DuckRaiseArc proxies match Ink's now-retired v1 (pre-2026-09-03-redeploy) proxy addresses. These are fully separate, chain-scoped contracts -- the identical strings do not mean anything is shared or misconfigured -- but never cross-paste an address between Ink and Arc configs without checking the chain ID field first.",
+    "No quote tokens or routes are seeded by this deploy (Arc has no verified default assets yet, unlike Ink's original 15-address seed list which was also removed as part of the 2026-09-03 Ink size-limit fix). Add real Arc quote assets via setQuoteTokenAllowed/setRoutes/addQuoteToken before real trading can happen.",
+    "Owner and platformWallet are the same deployer EOA / treasury wallet already used on Ink. Consider a timelock/multisig before real volume flows through this.",
+    "No subgraph, backend, or interface support exists for Arc yet -- this deploy is contracts-only, per explicit instruction to leave the interface untouched. Indexing/UI work is a separate follow-up.",
+    "Verified post-deploy via cast: owner/platformWallet/creationFee/launchFee/campaignFee/ctoFee all read back correctly on every contract; DuckHookV4Arc has V3 support wired on DuckLauncherArc only (addDexV3), DuckIncubationArc/DuckRaiseArc stay V4-only as specified."
+  ]
+}
