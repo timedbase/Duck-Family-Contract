@@ -7,6 +7,9 @@ import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Ini
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {PoolKey, SwapParams, IV4PoolManagerSwap} from "common-contracts/LaunchRouting.sol";
+import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
+import {IPoolManager as IV4PoolManagerReal} from "v4-core/interfaces/IPoolManager.sol";
+import {PoolId} from "v4-core/types/PoolId.sol";
 
 interface IPositionManagerV4 {
     function modifyLiquidities(bytes calldata unlockData, uint256 deadline) external payable;
@@ -39,6 +42,47 @@ interface IPositionManagerV3 {
         uint128 amount1Max;
     }
     function collect(CollectParams calldata params) external returns (uint256 amount0, uint256 amount1);
+
+    // The below three are used only by parkTokenSide -- a V4-launched
+    // token's own auxiliary, single-sided lock position on this same real
+    // V3 infra (see _parkOrBurn), separate from a token that launched on V3
+    // directly via registerPositionV3 (which already has its own real V3
+    // position from launch, collected via `collect` above).
+    function createAndInitializePoolIfNecessary(
+        address token0,
+        address token1,
+        uint24 fee,
+        uint160 sqrtPriceX96
+    ) external payable returns (address pool);
+
+    struct MintParams {
+        address token0;
+        address token1;
+        uint24 fee;
+        int24 tickLower;
+        int24 tickUpper;
+        uint256 amount0Desired;
+        uint256 amount1Desired;
+        uint256 amount0Min;
+        uint256 amount1Min;
+        address recipient;
+        uint256 deadline;
+    }
+    function mint(MintParams calldata params)
+        external payable
+        returns (uint256 tokenId, uint128 liquidity, uint256 amount0, uint256 amount1);
+
+    struct IncreaseLiquidityParams {
+        uint256 tokenId;
+        uint256 amount0Desired;
+        uint256 amount1Desired;
+        uint256 amount0Min;
+        uint256 amount1Min;
+        uint256 deadline;
+    }
+    function increaseLiquidity(IncreaseLiquidityParams calldata params)
+        external payable
+        returns (uint128 liquidity, uint256 amount0, uint256 amount1);
 }
 
 interface IERC20Balance {
@@ -58,6 +102,7 @@ contract DuckLockerArc is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     error PendingValueMismatch();
     error Unauthorized();
     error InvalidBps();
+    error NotSelf();
     error InsufficientCTOFee();
     error NoCTOApplication();
     error CTOApplicationPending();
@@ -74,6 +119,22 @@ contract DuckLockerArc is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     uint160 private constant _MAX_SQRT_PRICE = 1461446703485210103287273052203988822378723970342;
 
     address private constant DEAD = 0x000000000000000000000000000000000000dEaD;
+
+    // A V4-launched token's token-side LP fee is parked as a single-sided
+    // V3 position starting this many ticks above (or, mirrored, below --
+    // see parkTokenSide) the pool's current price, rather than being burned
+    // outright. 9200 ticks = 1.0001^9200 ~= +150.9% (2.51x), safely clearing
+    // the intended "2.5x spot" floor even after rounding to a usable
+    // (TICK_SPACING-aligned) tick. Under ordinary price action this range
+    // never gets crossed -- the parked tokens sit locked forever, same as a
+    // burn -- it only starts trading (and earning V3 fees) if price rallies
+    // through it. Mirrors DuckLocker.sol's Ink implementation exactly.
+    int24 private constant PARK_TICK_OFFSET = 9200;
+    // TickMath.MIN_TICK/MAX_TICK (-887272/887272) rounded to the nearest
+    // usable multiple of TICK_SPACING (200), so the far side of the parked
+    // range always spans to the edge of the curve.
+    int24 private constant PARK_MIN_TICK = -887200;
+    int24 private constant PARK_MAX_TICK = 887200;
 
     struct Position {
         uint256 tokenId;
@@ -149,6 +210,24 @@ contract DuckLockerArc is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     mapping(address => Position) public positions;
     address[] public allTokens;
 
+    // When set, a V4-launched token's token-side LP fee is parked as
+    // permanently-locked, single-sided V3 liquidity (see parkTokenSide)
+    // instead of being burned. address(0) disables it -- default behavior
+    // is an outright burn, same as before this was added. No separate
+    // StateView setting is needed here (unlike Ink's DuckLocker) -- Arc's
+    // live pool price is read directly off the real V4 PoolManager via
+    // v4-core's own StateLibrary, using the pool manager address each
+    // position's positionManager.poolManager() already exposes.
+    address public v3PositionManager;
+
+    // Second, independent NFT position per token -- separate from the V4
+    // position already tracked in `positions`, since this lives on a
+    // completely different pool (the token's own V3 pool, not the V4 one it
+    // launched on). Only ever set for a V4-launched token (isV3 == false);
+    // a token that launched on V3 directly already has its own real V3
+    // position via `positions[token].tokenId` and never touches this.
+    mapping(address => uint256) public v3LockTokenId;
+
     address private _cbPoolManagerExpected;
 
     // Only the upgrade authority is timelocked; every other admin action
@@ -183,6 +262,10 @@ contract DuckLockerArc is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     event LauncherRemoved(address indexed launcher);
     event PlatformWalletSet(address indexed wallet);
     event PlatformTokenSet(address indexed token);
+    event V3PositionManagerSet(address indexed manager);
+    // Emitted instead of (or as part of) FeesClaimed's burn amount when the
+    // token side was parked into the V3 position rather than sent to DEAD.
+    event TokenSideParked(address indexed token, uint256 indexed tokenId, uint256 amount);
 
     modifier onlyLauncher() { if (!isLauncher[msg.sender]) revert NotLauncher(); _; }
 
@@ -257,6 +340,13 @@ contract DuckLockerArc is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     function setV3CtoFee(uint256 fee_) external onlyOwner {
         v3CtoFee = fee_;
         emit V3CTOFeeSet(fee_);
+    }
+
+    // address(0) disables token-side parking for V4-launched tokens --
+    // falls back to a plain burn.
+    function setV3PositionManager(address manager) external onlyOwner {
+        v3PositionManager = manager;
+        emit V3PositionManagerSet(manager);
     }
 
     function cancelAction(bytes32 actionId) external onlyOwner {
@@ -372,6 +462,13 @@ contract DuckLockerArc is Initializable, UUPSUpgradeable, OwnableUpgradeable {
 
         _collectAndDistribute(token, pos);
 
+        // Best-effort: collects whatever real V3 trading fees a V4-launched
+        // token's parked position (see parkTokenSide) has earned -- only
+        // nonzero once/if price actually rallies through the parked range --
+        // straight to platformWallet. No-ops for a V3-launched token (never
+        // has one of these) or when there's nothing accrued yet.
+        try this.claimParkedV3Fees(token) {} catch {}
+
         // V3 has no hook -- the creator's cut is already paid out directly
         // inside _collectAndDistribute's V3 branch above, there's nothing
         // separate to claim here.
@@ -381,6 +478,25 @@ contract DuckLockerArc is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         // separately-accrued sell-fee balance -- if there's nothing accrued
         // it just no-ops, so this never blocks the LP-side claim above.
         try IDuckHookV4Minimal(pos.hook).claimFees(pos.poolId) {} catch {}
+    }
+
+    // Routes a V4-launched token's parked V3 position's own trading-fee
+    // revenue to platformWallet -- distinct from, and in addition to, the
+    // V4-side token/quote split _collectAndDistribute already handles.
+    // Never touches the position's underlying liquidity (that stays
+    // permanently locked; collect() only ever returns fees accrued since
+    // the last collect/increaseLiquidity, never principal). External +
+    // self-only (see NotSelf) purely so claimFees can wrap it in try/catch.
+    function claimParkedV3Fees(address token) external {
+        if (msg.sender != address(this)) revert NotSelf();
+        uint256 tokenId = v3LockTokenId[token];
+        if (tokenId == 0 || v3PositionManager == address(0)) return;
+        IPositionManagerV3(v3PositionManager).collect(IPositionManagerV3.CollectParams({
+            tokenId:     tokenId,
+            recipient:   platformWallet,
+            amount0Max:  type(uint128).max,
+            amount1Max:  type(uint128).max
+        }));
     }
 
     function claimAllFees() external onlyOwner {
@@ -444,7 +560,7 @@ contract DuckLockerArc is Initializable, UUPSUpgradeable, OwnableUpgradeable {
             ? (pos.token0, pos.token1)
             : (pos.token1, pos.token0);
 
-        _safeTransfer(tokenSide, DEAD, burned);
+        _parkOrBurn(token, tokenSide, burned);
 
         if (toPlatform > 0 && platformToken != address(0) && quoteSide == platformToken) {
             uint256 boughtBack = _swapForBurn(pos, quoteSide, tokenSide, toPlatform);
@@ -454,6 +570,106 @@ contract DuckLockerArc is Initializable, UUPSUpgradeable, OwnableUpgradeable {
             _safeTransfer(quoteSide, platformWallet, toPlatform);
             emit FeesClaimed(token, burned, toPlatform);
         }
+    }
+
+    // Parks a V4-launched token's token-side LP fee as a single-sided V3
+    // position instead of burning it outright, when the owner has wired up
+    // v3PositionManager. try/catch (self-call, see parkTokenSide) so a
+    // failure -- no V3 infra wired up yet, or a pathological pool/price
+    // state -- can never block the underlying V4 fee claim; it just falls
+    // back to a plain burn for that round.
+    function _parkOrBurn(address token, address tokenSide, uint256 amount) private {
+        if (amount == 0) return;
+        if (v3PositionManager != address(0)) {
+            try this.parkTokenSide(token, tokenSide, amount) returns (uint256) {
+                return;
+            } catch {}
+        }
+        _safeTransfer(tokenSide, DEAD, amount);
+    }
+
+    // Mints (first claim) or extends (every claim after) a single-sided V3
+    // position holding the token-side fee, placed starting ~2.5x above the
+    // pool's current price -- see PARK_TICK_OFFSET. A position with a range
+    // entirely on one side of the current price is 100% composed of
+    // whichever currency that side represents (standard Uniswap V3
+    // behavior), which is what makes single-sided funding possible with no
+    // swap. Ticks price token1-per-token0, so which direction "above
+    // current price" points depends on whether the project token is token0
+    // or token1 -- token0 up / token1 down, worked out below.
+    //
+    // Only ever called for a V4-launched token (isV3 == false) -- a token
+    // that launched on V3 directly already has its own real V3 position
+    // from launch. Reads the live V4 price directly off the real
+    // PoolManager via v4-core's own StateLibrary (Arc has no separate
+    // StateView periphery deployment the way Ink does), rather than
+    // trusting any hand-rolled storage-slot math.
+    //
+    // External + self-only (see NotSelf) purely so _parkOrBurn can wrap it
+    // in try/catch.
+    function parkTokenSide(address token, address tokenSide, uint256 amount)
+        external returns (uint256 tokenId)
+    {
+        if (msg.sender != address(this)) revert NotSelf();
+
+        Position storage pos = positions[token];
+        address poolManager = IPositionManagerV4(pos.positionManager).poolManager();
+        (uint160 poolSqrtPriceX96, int24 poolTick,,) =
+            StateLibrary.getSlot0(IV4PoolManagerReal(poolManager), PoolId.wrap(pos.poolId));
+        bool tokenIsToken0 = tokenSide == pos.token0;
+
+        tokenId = v3LockTokenId[token];
+        if (tokenId == 0) {
+            IPositionManagerV3(v3PositionManager).createAndInitializePoolIfNecessary(
+                pos.token0, pos.token1, FEE_TIER, poolSqrtPriceX96
+            );
+
+            (int24 tickLower, int24 tickUpper) = tokenIsToken0
+                ? (_roundUpToSpacing(poolTick + PARK_TICK_OFFSET, TICK_SPACING), PARK_MAX_TICK)
+                : (PARK_MIN_TICK, _roundDownToSpacing(poolTick - PARK_TICK_OFFSET, TICK_SPACING));
+
+            _approve(tokenSide, v3PositionManager, amount);
+            (tokenId,,,) = IPositionManagerV3(v3PositionManager).mint(IPositionManagerV3.MintParams({
+                token0:          pos.token0,
+                token1:          pos.token1,
+                fee:             FEE_TIER,
+                tickLower:       tickLower,
+                tickUpper:       tickUpper,
+                amount0Desired:  tokenIsToken0 ? amount : 0,
+                amount1Desired:  tokenIsToken0 ? 0 : amount,
+                amount0Min:      0,
+                amount1Min:      0,
+                recipient:       address(this),
+                deadline:        block.timestamp
+            }));
+            v3LockTokenId[token] = tokenId;
+        } else {
+            _approve(tokenSide, v3PositionManager, amount);
+            IPositionManagerV3(v3PositionManager).increaseLiquidity(IPositionManagerV3.IncreaseLiquidityParams({
+                tokenId:         tokenId,
+                amount0Desired:  tokenIsToken0 ? amount : 0,
+                amount1Desired:  tokenIsToken0 ? 0 : amount,
+                amount0Min:      0,
+                amount1Min:      0,
+                deadline:        block.timestamp
+            }));
+        }
+
+        emit TokenSideParked(token, tokenId, amount);
+    }
+
+    function _roundUpToSpacing(int24 tick, int24 spacing) private pure returns (int24) {
+        int24 r = tick % spacing;
+        if (r == 0) return tick;
+        if (r > 0) return tick - r + spacing;
+        return tick - r;
+    }
+
+    function _roundDownToSpacing(int24 tick, int24 spacing) private pure returns (int24) {
+        int24 r = tick % spacing;
+        if (r == 0) return tick;
+        if (r > 0) return tick - r;
+        return tick - r - spacing;
     }
 
     // No hook on V3 -- collect() pulls everything accrued (both directions,
@@ -554,6 +770,13 @@ contract DuckLockerArc is Initializable, UUPSUpgradeable, OwnableUpgradeable {
             abi.encodeWithSelector(0xa9059cbb, to, amount)
         );
         if (!ok2 || (data.length > 0 && !abi.decode(data, (bool)))) revert TransferFailed();
+    }
+
+    function _approve(address token, address spender, uint256 amount) private {
+        (bool ok, bytes memory data) = token.call(
+            abi.encodeWithSelector(0x095ea7b3, spender, amount)
+        );
+        if (!ok || (data.length > 0 && !abi.decode(data, (bool)))) revert TransferFailed();
     }
 
     receive() external payable {}

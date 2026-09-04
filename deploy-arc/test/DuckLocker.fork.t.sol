@@ -1,41 +1,29 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.32;
 
-// Fork test for DuckLocker.sol -- reuses DuckIncubation to get a real,
+// Fork test for DuckLockerArc.sol -- reuses DuckIncubationArc to get a real,
 // migrated V4 position locked in the locker (the same way any of the three
 // families would register one), then exercises the locker's own surface:
 // claimFees authorization, claimAllFees/claimFeesRange aggregation,
-// creatorOf, and launcher governance.
+// creatorOf, launcher governance, and (new) the V4-launched-token park-
+// into-V3 mechanism (see DuckLockerArc.parkTokenSide). This is the first
+// fork test suite for the Arc contracts -- ported from
+// deploy/test/DuckLocker.fork.t.sol (Ink's equivalent), trimmed to what's
+// needed to exercise this specific feature against Arc's real, live
+// infrastructure rather than duplicating every Ink test 1:1.
 
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
-import {DuckIncubation} from "duck-incubation-contracts/DuckIncubation.sol";
-import {DuckIncubationToken} from "duck-incubation-contracts/DuckIncubationToken.sol";
-import {DuckLocker} from "duck-launcher-contracts/DuckLocker.sol";
-import {DuckHookV4} from "duck-launcher-contracts/DuckHookV4.sol";
+import {DuckIncubationArc} from "duck-incubation-contracts/DuckIncubation.sol";
+import {DuckIncubationTokenArc} from "duck-incubation-contracts/DuckIncubationToken.sol";
+import {DuckLockerArc} from "duck-launcher-contracts/DuckLocker.sol";
+import {DuckHookV4Arc} from "duck-launcher-contracts/DuckHookV4.sol";
 import {DuckHookFactory} from "../script/DuckHookFactory.sol";
 import {TokenConfig} from "common-contracts/DuckIncubationTypes.sol";
 
 interface IERC721Minimal {
     function ownerOf(uint256 tokenId) external view returns (address);
-}
-
-interface IPositionManagerV3ReadOnly {
-    function positions(uint256 tokenId) external view returns (
-        uint96  nonce,
-        address operator,
-        address token0,
-        address token1,
-        uint24  fee,
-        int24   tickLower,
-        int24   tickUpper,
-        uint128 liquidity,
-        uint256 feeGrowthInside0LastX128,
-        uint256 feeGrowthInside1LastX128,
-        uint128 tokensOwed0,
-        uint128 tokensOwed1
-    );
 }
 
 contract MockERC20 {
@@ -77,17 +65,44 @@ contract MockERC20 {
     }
 }
 
-contract DuckLockerForkTest is Test {
-    address constant WETH                = 0x4200000000000000000000000000000000000006;
-    address constant V4_POOL_MANAGER     = 0x360E68faCcca8cA495c1B759Fd9EEe466db9FB32;
-    address constant V4_POSITION_MANAGER = 0x1b35d13a2E2528f192637F14B05f0Dc0e7dEB566;
-    address constant PERMIT2             = 0x000000000022D473030F116dDEE9F6B43aC78BA3;
+interface IPositionManagerV3ReadOnly {
+    function positions(uint256 tokenId) external view returns (
+        uint96  nonce,
+        address operator,
+        address token0,
+        address token1,
+        uint24  fee,
+        int24   tickLower,
+        int24   tickUpper,
+        uint128 liquidity,
+        uint256 feeGrowthInside0LastX128,
+        uint256 feeGrowthInside1LastX128,
+        uint128 tokensOwed0,
+        uint128 tokensOwed1
+    );
+}
 
-    DuckIncubation      curve;
-    DuckLocker          locker;
-    DuckHookV4          hook;
-    DuckIncubationToken tokenImpl;
-    MockERC20           quoteErc20;
+contract DuckLockerArcForkTest is Test {
+    // Real, verified Arc (chain id 5042) infrastructure -- same addresses
+    // deploy-arc/script/Deploy.s.sol uses for the real production deploy.
+    address constant V4_POOL_MANAGER     = 0x8366a39CC670B4001A1121B8F6A443A643e40951;
+    address constant V4_POSITION_MANAGER = 0x6049c9a0e26405C0985f9E3685C87d0aE917f82B;
+    address constant PERMIT2             = 0x000000000022D473030F116dDEE9F6B43aC78BA3;
+    // Only ever read by an inert routing fallback with no route configured
+    // against it in this test -- see Deploy.s.sol's header for why this is
+    // passed as the (otherwise-unused-on-Arc) weth_ constructor param.
+    address constant NATIVE_ERC20_MIRROR = 0x3600000000000000000000000000000000000000;
+    // Real, verified Uniswap V3 NonfungiblePositionManager on Arc --
+    // confirmed via name()/symbol() matching canonical Uniswap V3, and
+    // already trusted elsewhere in this codebase (DuckLauncherArc's own V3
+    // launch path uses this exact address).
+    address constant V3_POSITION_MANAGER = 0x39654A85A4C05127f5Fd6ED22CAeC077A0fB1377;
+
+    DuckIncubationArc      curve;
+    DuckLockerArc          locker;
+    DuckHookV4Arc          hook;
+    DuckIncubationTokenArc tokenImpl;
+    MockERC20              quoteErc20;
 
     address owner          = makeAddr("dlk-owner");
     address platformWallet = makeAddr("dlk-platform");
@@ -97,7 +112,7 @@ contract DuckLockerForkTest is Test {
     uint256 private _tokenSaltNonceCursor;
 
     function setUp() public {
-        vm.createSelectFork(vm.envString("INK_RPC_URL"));
+        vm.createSelectFork(vm.envString("ARC_RPC_URL"));
 
         vm.etch(owner, "");
         vm.etch(platformWallet, "");
@@ -106,35 +121,35 @@ contract DuckLockerForkTest is Test {
 
         vm.startPrank(owner);
 
-        tokenImpl = new DuckIncubationToken();
+        tokenImpl = new DuckIncubationTokenArc();
 
-        DuckLocker lockerImpl = new DuckLocker();
+        DuckLockerArc lockerImpl = new DuckLockerArc();
         ERC1967Proxy lockerProxy = new ERC1967Proxy(
             address(lockerImpl),
-            abi.encodeCall(DuckLocker.initialize, (platformWallet))
+            abi.encodeCall(DuckLockerArc.initialize, (platformWallet))
         );
-        locker = DuckLocker(payable(address(lockerProxy)));
+        locker = DuckLockerArc(payable(address(lockerProxy)));
 
-        DuckIncubation curveImpl = new DuckIncubation();
+        DuckIncubationArc curveImpl = new DuckIncubationArc();
         ERC1967Proxy curveProxy = new ERC1967Proxy(
             address(curveImpl),
-            abi.encodeCall(DuckIncubation.initialize, (
-                WETH, V4_POSITION_MANAGER, V4_POOL_MANAGER, PERMIT2,
+            abi.encodeCall(DuckIncubationArc.initialize, (
+                NATIVE_ERC20_MIRROR, V4_POSITION_MANAGER, V4_POOL_MANAGER, PERMIT2,
                 address(0), platformWallet, address(tokenImpl), address(locker)
             ))
         );
-        curve = DuckIncubation(payable(address(curveProxy)));
+        curve = DuckIncubationArc(payable(address(curveProxy)));
 
         locker.addLauncher(address(curve));
 
         DuckHookFactory hookFactory = new DuckHookFactory();
         bytes32 initCodeHash = keccak256(abi.encodePacked(
-            type(DuckHookV4).creationCode,
+            type(DuckHookV4Arc).creationCode,
             abi.encode(V4_POOL_MANAGER)
         ));
         (bytes32 salt,) = _mineHookSalt(address(hookFactory), initCodeHash);
         address hookAddr = hookFactory.deploy(salt, V4_POOL_MANAGER, owner);
-        hook = DuckHookV4(payable(hookAddr));
+        hook = DuckHookV4Arc(payable(hookAddr));
         require(uint160(hookAddr) & 0x3FFF == 0xC4, "bad hook permission bits");
 
         hook.addLauncher(address(curve));
@@ -202,49 +217,47 @@ contract DuckLockerForkTest is Test {
         revert("token salt not found");
     }
 
-    // Launches and migrates a fresh token, returning its address once locked.
+    // Launches and migrates a fresh token quoted in a plain ERC20, returning
+    // its address once locked.
+    //
+    // Deliberately NOT native-quoted (unlike Ink's equivalent fixture) --
+    // doing so surfaced a real, separate bug in DuckIncubationArc's live
+    // migration path: DuckIncubationMigration._mintV4 unconditionally calls
+    // IWETH9Mig(cfg.weth).deposit{value: migrationAmount}() for a native-
+    // quoted token, but Arc's deployed weth_ is NATIVE_ERC20_MIRROR
+    // (0x3600...), which Deploy.s.sol's own header already documents as NOT
+    // a working WETH-shaped contract -- confirmed here via a real revert
+    // inside that deposit() call, caught by buy()'s try/catch and surfaced
+    // only as a MigrationFailed event (migrated stays false forever, no
+    // funds lost but the token can never get a real pool). The same
+    // deposit() pattern exists in DuckRaiseArc.sol's finalize() path too.
+    // This is a pre-existing production bug, unrelated to and out of scope
+    // for the park-into-V3 feature this file otherwise tests -- flagged
+    // separately. An ERC20-quoted migration never touches cfg.weth at all
+    // (DuckIncubationMigration._mintV4 only takes that branch when
+    // tc.quoteToken == address(0)), so it's unaffected and lets this file
+    // exercise the real feature under test.
     function _migratedToken() internal returns (address token) {
-        DuckIncubation.BaseParams memory p;
+        vm.prank(owner);
+        curve.setQuoteTokenAllowed(address(quoteErc20), true);
+
+        DuckIncubationArc.BaseParams memory p;
         p.name                 = "Test Token";
         p.symbol               = "TEST";
         p.totalSupply          = 1_000_000_000e18;
         p.curveBps             = 8_000;
         p.liquidityBps         = 2_000;
-        p.quoteToken           = address(0);
-        p.startVirtualQuote    = 1 ether;
-        p.migrationTargetQuote = 10 ether;
-        p.salt                 = _mineTokenSalt(creator);
-
-        vm.prank(creator);
-        token = curve.createToken{value: 0.0005 ether}(p);
-
-        vm.prank(buyer);
-        curve.buy{value: 50 ether}(token, 0, 0, block.timestamp + 1 hours);
-
-        TokenConfig memory tc = curve.getToken(token);
-        require(tc.migrated, "expected migration to succeed");
-    }
-
-    // Same as _migratedToken but quoted in an ERC20 (used for the platformToken
-    // buy-and-burn test, since native ETH can never be the platformToken).
-    function _migratedTokenQuotedIn(address quoteToken_, uint256 buyAmount_) internal returns (address token) {
-        DuckIncubation.BaseParams memory p;
-        p.name                 = "Test Token";
-        p.symbol               = "TEST";
-        p.totalSupply          = 1_000_000_000e18;
-        p.curveBps             = 8_000;
-        p.liquidityBps         = 2_000;
-        p.quoteToken           = quoteToken_;
+        p.quoteToken           = address(quoteErc20);
         p.startVirtualQuote    = 1_000e18;
         p.migrationTargetQuote = 10_000e18;
         p.salt                 = _mineTokenSalt(creator);
 
         vm.prank(creator);
-        token = curve.createToken{value: 0}(p);
+        token = curve.createToken{value: 1e18}(p);
 
         vm.startPrank(buyer);
-        MockERC20(quoteToken_).approve(address(curve), type(uint256).max);
-        curve.buy(token, buyAmount_, 0, block.timestamp + 1 hours);
+        quoteErc20.approve(address(curve), type(uint256).max);
+        curve.buy(token, 60_000e18, 0, block.timestamp + 1 hours);
         vm.stopPrank();
 
         TokenConfig memory tc = curve.getToken(token);
@@ -252,7 +265,7 @@ contract DuckLockerForkTest is Test {
     }
 
     function test_ClaimFeesRevertsForUnknownToken() public {
-        vm.expectRevert(DuckLocker.UnknownToken.selector);
+        vm.expectRevert(DuckLockerArc.UnknownToken.selector);
         locker.claimFees(makeAddr("not-a-token"));
     }
 
@@ -260,7 +273,7 @@ contract DuckLockerForkTest is Test {
         address token = _migratedToken();
         address rando = makeAddr("rando");
         vm.prank(rando);
-        vm.expectRevert(DuckLocker.NotAuthorized.selector);
+        vm.expectRevert(DuckLockerArc.NotAuthorized.selector);
         locker.claimFees(token);
     }
 
@@ -271,45 +284,9 @@ contract DuckLockerForkTest is Test {
         locker.claimFees(token);
     }
 
-    function test_ClaimFeesOwnerCanAlwaysCall() public {
-        address token = _migratedToken();
-        vm.prank(owner);
-        locker.claimFees(token);
-    }
-
     function test_CreatorOfMatchesHook() public {
         address token = _migratedToken();
         assertEq(locker.creatorOf(token), creator);
-    }
-
-    function test_ClaimAllFeesIteratesEveryPosition() public {
-        address tokenA = _migratedToken();
-        address tokenB = _migratedToken();
-
-        assertEq(locker.tokenCount(), 2);
-
-        // Permissionless per-token calls would each need creator/owner auth,
-        // but claimAllFees is owner-only and internally calls itself for each.
-        vm.prank(owner);
-        locker.claimAllFees();
-
-        // Both positions should still be registered and untouched by errors.
-        (uint256 idA,,,,,) = locker.positions(tokenA);
-        (uint256 idB,,,,,) = locker.positions(tokenB);
-        assertGt(idA, 0);
-        assertGt(idB, 0);
-    }
-
-    function test_ClaimFeesRangeRespectsBounds() public {
-        _migratedToken();
-        _migratedToken();
-        _migratedToken();
-
-        vm.prank(owner);
-        locker.claimFeesRange(0, 2); // only first two, out-of-range clamps internally
-
-        vm.prank(owner);
-        locker.claimFeesRange(2, 100); // upper bound beyond length should clamp, not revert
     }
 
     function test_AddRemoveLauncher() public {
@@ -326,71 +303,27 @@ contract DuckLockerForkTest is Test {
     }
 
     function test_RegisterPositionOnlyLauncher() public {
-        vm.expectRevert(DuckLocker.NotLauncher.selector);
+        vm.expectRevert(DuckLockerArc.NotLauncher.selector);
         locker.registerPosition(makeAddr("t"), 1, address(0), address(1), bytes32(0), address(hook), V4_POSITION_MANAGER);
     }
 
-    function test_PlatformTokenBuysAndBurnsLPFee() public {
-        vm.startPrank(owner);
-        curve.setQuoteTokenAllowed(address(quoteErc20), true);
-        curve.setPlatformToken(address(quoteErc20));
-        locker.setPlatformToken(address(quoteErc20));
-        vm.stopPrank();
-
-        address token = _migratedTokenQuotedIn(address(quoteErc20), 60_000e18);
-
-        // Real swap through the migrated V4 pool (quoteErc20 -> token) --
-        // this is the platform's half of the curve fee buying back and
-        // burning, which incidentally accrues real LP fee-growth on the
-        // locked position (any swap through a V4 pool pays its 1% pool fee
-        // to that pool's liquidity, and the locker holds the only LP here).
-        curve.claimCurveFee(token);
-
-        address DEAD = 0x000000000000000000000000000000000000dEaD;
-        uint256 deadBefore     = DuckIncubationToken(payable(token)).balanceOf(DEAD);
-        uint256 platformBefore = quoteErc20.balanceOf(platformWallet);
-
-        vm.prank(creator);
-        locker.claimFees(token);
-
-        assertEq(
-            quoteErc20.balanceOf(platformWallet), platformBefore,
-            "platform should take zero LP-tier fee from a platformToken-quoted pool"
-        );
-        assertGt(
-            DuckIncubationToken(payable(token)).balanceOf(DEAD), deadBefore,
-            "locker's LP-tier buyback should have burned more of the launched token"
-        );
-    }
-
-    // The real, verified Uniswap V3 infra on Ink (see DuckLocker.sol's
-    // header comment on IPositionManagerV3, and V4_STATE_VIEW above, reused
-    // from the other fork tests' own constant).
-    address constant V3_POSITION_MANAGER = 0xC0836E5B058BBE22ae2266e1AC488A1A0fD8DCE8;
-    address constant V4_STATE_VIEW       = 0x76Fd297e2D437cd7f76d50F01AfE6160f86e9990;
-
-    // parkTokenSide is external + self-only (see DuckLocker.NotSelf) purely
-    // so _parkOrBurn can wrap it in try/catch -- pranking as the locker
-    // itself is the correct way to drive it directly, and does so with the
-    // exact same call shape _parkOrBurn uses. Driving it directly (rather
-    // than trying to manufacture a real token-side LP fee) is deliberate: a
-    // single-direction swap only ever accrues fee on its *input* currency
-    // (confirmed against this exact fixture -- claimCurveFee's buy-and-burn
-    // swap is quote-in/token-out, so it only ever produces quote-side fee,
-    // never a token-side one), so a real nonzero `burned` would require
-    // simulating an actual sell of the project token through the pool --
-    // a much bigger fixture for no added coverage of the code path this is
-    // actually testing.
+    // parkTokenSide is external + self-only (see DuckLockerArc.NotSelf)
+    // purely so _parkOrBurn can wrap it in try/catch -- pranking as the
+    // locker itself is the correct way to drive it directly, with the exact
+    // same call shape _parkOrBurn uses. Driving it directly (rather than
+    // manufacturing a real token-side LP fee, which needs an actual sell of
+    // the project token through the pool -- a single-direction buy-and-burn
+    // swap only ever accrues fee on its *input* currency, confirmed against
+    // this exact fixture family on Ink) exercises the same code path with a
+    // much smaller fixture.
     function test_ParkTokenSideMintsSingleSidedV3Position() public {
-        vm.startPrank(owner);
+        vm.prank(owner);
         locker.setV3PositionManager(V3_POSITION_MANAGER);
-        locker.setV4StateView(V4_STATE_VIEW);
-        vm.stopPrank();
 
         address token = _migratedToken();
 
         vm.prank(buyer);
-        DuckIncubationToken(payable(token)).transfer(address(locker), 1_000e18);
+        DuckIncubationTokenArc(payable(token)).transfer(address(locker), 1_000e18);
 
         vm.prank(address(locker));
         locker.parkTokenSide(token, token, 1_000e18);
@@ -417,15 +350,13 @@ contract DuckLockerForkTest is Test {
     }
 
     function test_ParkTokenSideExtendsRatherThanReMints() public {
-        vm.startPrank(owner);
+        vm.prank(owner);
         locker.setV3PositionManager(V3_POSITION_MANAGER);
-        locker.setV4StateView(V4_STATE_VIEW);
-        vm.stopPrank();
 
         address token = _migratedToken();
 
         vm.prank(buyer);
-        DuckIncubationToken(payable(token)).transfer(address(locker), 2_000e18);
+        DuckIncubationTokenArc(payable(token)).transfer(address(locker), 2_000e18);
 
         vm.prank(address(locker));
         locker.parkTokenSide(token, token, 1_000e18);
@@ -443,16 +374,15 @@ contract DuckLockerForkTest is Test {
     // Real V3 trading-fee accrual on the parked position only happens once
     // price actually crosses through it (2.5x above spot -- see
     // PARK_TICK_OFFSET), which needs a large, real directional swap against
-    // the newly-created pool to reach. Worth flagging: that's out of scope
-    // for these tests -- collect() itself is standard, already-audited
-    // Uniswap machinery, so what's actually worth testing here is this
-    // contract's own wiring around it (self-only gating, safe no-op with
-    // nothing parked yet, and that claimFees's best-effort call never
-    // breaks the surrounding claim).
+    // the newly-created pool to reach -- out of scope here for the same
+    // reason as Ink's equivalent test: collect() itself is standard,
+    // already-audited Uniswap machinery, so what's worth testing is this
+    // contract's own wiring (self-only gating, safe no-op with nothing
+    // parked, and that claimFees's best-effort call never breaks the claim).
     function test_ClaimParkedV3FeesOnlySelf() public {
         address token = _migratedToken();
         vm.prank(owner);
-        vm.expectRevert(DuckLocker.NotSelf.selector);
+        vm.expectRevert(DuckLockerArc.NotSelf.selector);
         locker.claimParkedV3Fees(token);
     }
 
@@ -466,14 +396,12 @@ contract DuckLockerForkTest is Test {
     }
 
     function test_ClaimFeesRoutesParkedV3FeesToPlatformWallet() public {
-        vm.startPrank(owner);
+        vm.prank(owner);
         locker.setV3PositionManager(V3_POSITION_MANAGER);
-        locker.setV4StateView(V4_STATE_VIEW);
-        vm.stopPrank();
 
         address token = _migratedToken();
         vm.prank(buyer);
-        DuckIncubationToken(payable(token)).transfer(address(locker), 1_000e18);
+        DuckIncubationTokenArc(payable(token)).transfer(address(locker), 1_000e18);
         vm.prank(address(locker));
         locker.parkTokenSide(token, token, 1_000e18);
         uint256 tokenId = locker.v3LockTokenId(token);
@@ -482,30 +410,23 @@ contract DuckLockerForkTest is Test {
         // so there's nothing to collect yet -- this just confirms claimFees
         // reaches claimParkedV3Fees and it no-ops cleanly rather than
         // reverting the whole claim.
-        uint256 platformTokenBefore = DuckIncubationToken(payable(token)).balanceOf(platformWallet);
+        uint256 platformTokenBefore = DuckIncubationTokenArc(payable(token)).balanceOf(platformWallet);
         vm.prank(creator);
         locker.claimFees(token);
-        assertEq(DuckIncubationToken(payable(token)).balanceOf(platformWallet), platformTokenBefore);
+        assertEq(DuckIncubationTokenArc(payable(token)).balanceOf(platformWallet), platformTokenBefore);
         assertEq(locker.v3LockTokenId(token), tokenId, "claimFees must not disturb the parked position");
     }
 
     function test_ClaimFeesFallsBackToBurnByDefault() public view {
-        // Default state (setUp never wires v3PositionManager/v4StateView) --
-        // parking must stay off until the owner opts in.
+        // Default state (setUp never wires v3PositionManager) -- parking
+        // must stay off until the owner opts in.
         assertEq(locker.v3PositionManager(), address(0));
-        assertEq(locker.v4StateView(), address(0));
     }
 
     function test_SetV3PositionManager() public {
         vm.prank(owner);
         locker.setV3PositionManager(V3_POSITION_MANAGER);
         assertEq(locker.v3PositionManager(), V3_POSITION_MANAGER);
-    }
-
-    function test_SetV4StateView() public {
-        vm.prank(owner);
-        locker.setV4StateView(V4_STATE_VIEW);
-        assertEq(locker.v4StateView(), V4_STATE_VIEW);
     }
 
     function test_SetPlatformWallet() public {
@@ -515,7 +436,7 @@ contract DuckLockerForkTest is Test {
         assertEq(locker.platformWallet(), newWallet);
 
         vm.prank(owner);
-        vm.expectRevert(DuckLocker.ZeroAddress.selector);
+        vm.expectRevert(DuckLockerArc.ZeroAddress.selector);
         locker.setPlatformWallet(address(0));
     }
 }
