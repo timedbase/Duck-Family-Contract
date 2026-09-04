@@ -97,9 +97,6 @@ contract DuckLockerArc is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     error AlreadyRegistered();
     error UnknownToken();
     error TransferFailed();
-    error TimelockNotQueued();
-    error TimelockNotExpired();
-    error PendingValueMismatch();
     error Unauthorized();
     error InvalidBps();
     error NotSelf();
@@ -230,20 +227,6 @@ contract DuckLockerArc is Initializable, UUPSUpgradeable, OwnableUpgradeable {
 
     address private _cbPoolManagerExpected;
 
-    // Only the upgrade authority is timelocked; every other admin action
-    // stays instant onlyOwner.
-    uint256 public constant TIMELOCK_DELAY = 48 hours;
-
-    bytes32 public constant TL_UPGRADE = keccak256("UPGRADE");
-
-    mapping(bytes32 => uint256) public timelockExpiry;
-
-    address private _pendingUpgradeImpl;
-
-    event TimelockQueued(bytes32 indexed actionId, uint256 executeAfter);
-    event TimelockExecuted(bytes32 indexed actionId);
-    event TimelockCancelled(bytes32 indexed actionId);
-
     event PositionRegistered(
         address indexed token,
         uint256 indexed tokenId,
@@ -291,16 +274,13 @@ contract DuckLockerArc is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         v3CtoFee = 50e18;
     }
 
-    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {
-        if (newImplementation != _pendingUpgradeImpl) revert PendingValueMismatch();
-        _consumeAction(TL_UPGRADE);
-    }
-
-    function proposeUpgrade(address newImpl_) external onlyOwner {
-        if (newImpl_ == address(0)) revert ZeroAddress();
-        _pendingUpgradeImpl = newImpl_;
-        _queueAction(TL_UPGRADE);
-    }
+    // Upgrade authority used to be timelocked (48h between proposeUpgrade
+    // and this actually taking effect) -- removed at the owner's explicit
+    // request, so upgradeToAndCall now takes effect immediately, same as
+    // every other onlyOwner action on this contract. There is no longer a
+    // proposeUpgrade step; the compromised-key protection that gave up is a
+    // known, deliberate tradeoff for faster iteration.
+    function _authorizeUpgrade(address) internal override onlyOwner {}
 
     function addLauncher(address launcher_) external onlyOwner {
         if (launcher_ == address(0)) revert ZeroAddress();
@@ -347,26 +327,6 @@ contract DuckLockerArc is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     function setV3PositionManager(address manager) external onlyOwner {
         v3PositionManager = manager;
         emit V3PositionManagerSet(manager);
-    }
-
-    function cancelAction(bytes32 actionId) external onlyOwner {
-        if (timelockExpiry[actionId] == 0) revert TimelockNotQueued();
-        timelockExpiry[actionId] = 0;
-        emit TimelockCancelled(actionId);
-    }
-
-    function _queueAction(bytes32 actionId) private {
-        uint256 unlock = block.timestamp + TIMELOCK_DELAY;
-        timelockExpiry[actionId] = unlock;
-        emit TimelockQueued(actionId, unlock);
-    }
-
-    function _consumeAction(bytes32 actionId) private {
-        uint256 expiry = timelockExpiry[actionId];
-        if (expiry == 0) revert TimelockNotQueued();
-        if (block.timestamp < expiry) revert TimelockNotExpired();
-        timelockExpiry[actionId] = 0;
-        emit TimelockExecuted(actionId);
     }
 
     function registerPosition(
