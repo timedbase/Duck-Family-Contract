@@ -3,28 +3,60 @@ pragma solidity ^0.8.32;
 
 // duckfun.family — deploy the new DuckLocker implementation (token-side LP
 // fee parked into a single-sided V3 position instead of burned outright,
-// see DuckLocker.sol's PARK_TICK_OFFSET/parkTokenSide), upgrade the live
-// proxy to it, and wire up the new feature -- all in one broadcast.
+// see DuckLocker.sol's PARK_TICK_OFFSET/parkTokenSide) and queue the
+// upgrade on the live proxy.
 //
-// DuckLocker's upgrade authority used to be timelocked (48h between
-// proposeUpgrade and the upgrade taking effect) -- removed at the owner's
-// explicit request, so upgradeToAndCall now takes effect immediately, same
-// as every other onlyOwner action on this contract. There is no separate
-// proposeUpgrade step anymore; this script does the whole thing in one go.
+// IMPORTANT: the upgrade authority check that runs here is whatever is
+// CURRENTLY live on the proxy -- not the new implementation being deployed.
+// The currently-live DuckLocker still requires the old two-step flow
+// (proposeUpgrade, then a 48h wait, then upgradeToAndCall) even though the
+// NEW implementation being proposed here no longer has that requirement
+// once it's actually active (its source no longer even declares
+// proposeUpgrade -- hence the separate minimal interface below, targeting
+// the proxy directly rather than the new DuckLocker type). So this script
+// only calls proposeUpgrade; a separate upgradeToAndCall call at least 48
+// hours later is what actually swaps the implementation (see below) --
+// attempting that call any sooner, or skipping proposeUpgrade, reverts with
+// PendingValueMismatch().
 //
 // Usage (recommended -- encrypted local keystore, no plaintext key anywhere):
 //   cast wallet import deployer --interactive          # skip if already imported
 //   cd deploy
 //   DEPLOYER_ADDRESS=0x43977b10095Fc5E153F907fe2E888C083fA4Fb66 \
 //     forge script script/UpgradeLocker.s.sol:UpgradeLocker --rpc-url ink --account deployer --broadcast -vvvv
+//
+// After this script logs the new implementation address, wait 48+ hours,
+// then run (same signer):
+//   cast send 0x74738a87e4D4E0eB2706724a9314d1b4452ecdFE \
+//     "upgradeToAndCall(address,bytes)" <NEW_IMPL_FROM_THIS_SCRIPT> 0x \
+//     --rpc-url https://rpc-gel.inkonchain.com --private-key "$PRIVATE_KEY"
+//
+// Once that succeeds, the new implementation's own upgrade authority has no
+// timelock any more (removed at the owner's request) -- but the feature
+// itself is still OFF until wired up, same as every other opt-in setting on
+// this contract:
+//   cast send 0x74738a87e4D4E0eB2706724a9314d1b4452ecdFE \
+//     "setV3PositionManager(address)" 0xC0836E5B058BBE22ae2266e1AC488A1A0fD8DCE8 \
+//     --rpc-url https://rpc-gel.inkonchain.com --private-key "$PRIVATE_KEY"
+//   cast send 0x74738a87e4D4E0eB2706724a9314d1b4452ecdFE \
+//     "setV4StateView(address)" 0x76Fd297e2D437cd7f76d50F01AfE6160f86e9990 \
+//     --rpc-url https://rpc-gel.inkonchain.com --private-key "$PRIVATE_KEY"
 
 import {Script, console} from "forge-std/Script.sol";
 import {DuckLocker} from "duck-launcher-contracts/DuckLocker.sol";
 
+// The new DuckLocker source no longer declares proposeUpgrade (removed
+// along with the timelock) -- but the proxy is still running the OLD
+// implementation, which does, until the upgrade below actually lands. This
+// targets the proxy directly with just that one selector rather than the
+// new DuckLocker type, since Solidity typechecks calls against the type
+// used at the call site, not whatever's actually deployed.
+interface IPendingUpgradeableLocker {
+    function proposeUpgrade(address newImpl) external;
+}
+
 contract UpgradeLocker is Script {
     address constant DUCK_LOCKER_PROXY = 0x74738a87e4D4E0eB2706724a9314d1b4452ecdFE;
-    address constant V3_POSITION_MANAGER = 0xC0836E5B058BBE22ae2266e1AC488A1A0fD8DCE8;
-    address constant V4_STATE_VIEW       = 0x76Fd297e2D437cd7f76d50F01AfE6160f86e9990;
 
     function run() external {
         uint256 deployerKey = vm.envOr("PRIVATE_KEY", uint256(0));
@@ -40,13 +72,8 @@ contract UpgradeLocker is Script {
         DuckLocker newImpl = new DuckLocker();
         console.log("New DuckLocker implementation:", address(newImpl));
 
-        DuckLocker locker = DuckLocker(payable(DUCK_LOCKER_PROXY));
-        locker.upgradeToAndCall(address(newImpl), "");
-        console.log("Upgrade complete");
-
-        locker.setV3PositionManager(V3_POSITION_MANAGER);
-        locker.setV4StateView(V4_STATE_VIEW);
-        console.log("Park-into-V3 feature wired up and live");
+        IPendingUpgradeableLocker(DUCK_LOCKER_PROXY).proposeUpgrade(address(newImpl));
+        console.log("proposeUpgrade queued -- run upgradeToAndCall after the 48h timelock (see header comment)");
 
         vm.stopBroadcast();
     }
